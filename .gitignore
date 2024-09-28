@@ -1,0 +1,8 @@
+# Ignore environment variables file
+
+# Ensure .env file is ignored
+
+.env
+emotions.db
+tmp
+build

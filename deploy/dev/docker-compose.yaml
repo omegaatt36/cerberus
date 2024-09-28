@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: always
+    container_name: cerberus-database
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cerberus
+
+    volumes:
+      - cerberus-database:/var/lib/postgresql/data
+    networks:
+      - internal
+    ports:
+      - 5432:5432
+
+  adminer:
+    image: adminer
+    container_name: cerberus-adminer
+    restart: always
+    networks:
+      - internal
+    ports:
+      - 9527:8080
+
+  api-dbmigration:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.template
+      args:
+        SERVICE_NAME: "cerberus-dbmigration"
+        SERVICE_PORT: "8080"
+    container_name: cerberus-dbmigration
+    environment:
+      - DB_DIALECT=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=cerberus
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_SILENCE_LOGGER=false
+    networks:
+      - internal
+    depends_on:
+      - postgres
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.128.0.0/16
+
+volumes:
+  cerberus-database:
+    driver: local

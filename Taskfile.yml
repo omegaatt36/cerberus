@@ -1,0 +1,49 @@
+version: "3"
+env:
+  DB_DIALECT: postgres
+  DB_HOST: localhost
+  DB_PORT: 5432
+  DB_NAME: cerberus
+  DB_USER: postgres
+  DB_PASSWORD: postgres
+  DB_SILENCE_LOGGER: false
+  DB_SLOW_THRESHOLD_MILLISECONDS: 1000
+  INTERNAL_TOKEN: secret
+  LOG_LEVEL: debug
+
+tasks:
+  dev:
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yaml up --build
+  test:
+    cmds:
+      - go test -v ./...
+  fmt:
+    cmds:
+      - gofmt -s -w -l .
+      - goimports -w -local github.com/omegaatt36/cerberus $(find . -type f -name '*.go')
+      - gci write -s standard -s default -s "Prefix(github.com/omegaatt36/cerberus)" --skip-generated .
+      - go mod tidy
+  lint:
+    cmds:
+      - revive -formatter friendly -config revive.toml  ./...
+      - find . -name "*.json" | xargs -n 1 -t gojq . > /dev/null
+      - go vet -all ./...
+      - misspell -error */**
+      - staticcheck $(go list ./...)
+  live-bot:
+    cmds:
+      - air --build.cmd "go build -o build/cerberus cmd/cerberus/main.go" --build.bin "./build/cerberus"
+  setup-db:
+    desc: Setup the database
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yaml up postgres adminer -d
+  remove-db:
+    desc: Remove the database
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yaml down postgres adminer
+  migrate-cerberus:
+    # env:
+    #   ROLLBACK_LAST: true
+    cmds:
+      - go run cmd/cerberus.dbmigration/main.go
