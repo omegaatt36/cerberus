@@ -27,6 +27,7 @@ var config struct {
 	slackAppToken string
 
 	geminiAPIKey string
+	geminiModel  string
 }
 
 var (
@@ -34,12 +35,12 @@ var (
 	db            *sql.DB
 )
 
-func before(_ *cli.Context) error {
+func before(ctx *cli.Context) error {
 	if err := initSLog(config.logLevel); err != nil {
 		return err
 	}
 
-	service, err := gemini.NewService(config.geminiAPIKey, "gemini-pro")
+	service, err := gemini.NewService(ctx.Context, config.geminiAPIKey, config.geminiModel)
 	if err != nil {
 		return err
 	}
@@ -103,6 +104,13 @@ func main() {
 			Value:       "",
 			Required:    true,
 			Destination: &config.geminiAPIKey,
+		},
+		&cli.StringFlag{
+			Name:        "gemini-model",
+			EnvVars:     []string{"GEMINI_MODEL"},
+			Value:       "gemini-1.5-flash",
+			Required:    false,
+			Destination: &config.geminiModel,
 		},
 	}
 	cliFlags = append(cliFlags, config.databaseConnectionOption.CliFlags()...)

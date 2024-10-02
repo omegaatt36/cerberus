@@ -17,11 +17,36 @@ type Service struct {
 }
 
 // NewService creates a new Gemini service
-func NewService(apiKey, model string) (*Service, error) {
-	ctx := context.Background()
+func NewService(ctx context.Context, apiKey, model string) (*Service, error) {
 	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Gemini client: %v", err)
+	}
+
+	fullModelName := func(name string) string {
+		if strings.ContainsRune(name, '/') {
+			return name
+		}
+		return "models/" + name
+	}(model)
+
+	var exist bool
+	modelIterator := client.ListModels(ctx)
+	for {
+		m, err := modelIterator.Next()
+		if err != nil {
+			break
+		}
+
+		if m.Name == fullModelName {
+			exist = true
+			fmt.Println("found")
+			break
+		}
+	}
+
+	if !exist {
+		return nil, fmt.Errorf("model %s not found", model)
 	}
 
 	return &Service{
