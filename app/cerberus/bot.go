@@ -106,7 +106,6 @@ func (b *Bot) handleEmojiCommand(ctx context.Context, command *slack.SlashComman
 	}
 
 	input := command.Text
-	slog.Info("Input received", "input", input)
 	if input == "" {
 		slog.Info("Empty input received")
 		return "Please provide an emoji and optional text.", nil
@@ -150,7 +149,7 @@ func (b *Bot) handleEmojiCommand(ctx context.Context, command *slack.SlashComman
 		slog.ErrorContext(ctx, "updating task failed", "error", err)
 	}
 
-	return fmt.Sprintf("建議任務: %s", task), nil
+	return task, nil
 }
 
 func (b *Bot) handleEvents(ctx context.Context) {
@@ -206,17 +205,22 @@ func (b *Bot) handleSlashCommand(command slack.SlashCommand) error {
 
 	switch command.Command {
 	case "/emoji":
+		channelID := command.ChannelID
+		if _, _, err := b.socketClient.PostMessageContext(ctx, channelID,
+			slack.MsgOptionText(fmt.Sprintf("<@%s> said: %s", command.UserID, command.Text), false)); err != nil {
+			slog.ErrorContext(ctx, "error sending message", "error", err)
+		}
 		message, err := b.handleEmojiCommand(ctx, &command)
 		if err != nil {
-			return b.sendMessage(ctx, command.ChannelID, err.Error())
+			return b.sendMessage(ctx, channelID, err.Error())
 		}
-		return b.sendMessage(ctx, command.ChannelID, message)
+		return b.sendMessage(ctx, channelID, message)
 	default:
 		return fmt.Errorf("unknown command: %s", command.Command)
 	}
 }
 
 func (b *Bot) sendMessage(ctx context.Context, channelID string, message string) error {
-	_, _, err := b.slackClient.PostMessageContext(ctx, channelID, slack.MsgOptionText(message, false))
+	_, _, err := b.socketClient.PostMessageContext(ctx, channelID, slack.MsgOptionText(message, false))
 	return err
 }
