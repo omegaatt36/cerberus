@@ -18,6 +18,7 @@ func (o *WithAIServiceOption) apply(bot *Bot) {
 	bot.aiService = o.AIService
 }
 
+// WithEmotionRepositoryOption defines the option to set EmotionRepository.
 type WithEmotionRepositoryOption struct {
 	EmotionRepository domain.EmotionRepository
 }

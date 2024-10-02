@@ -4,19 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
-	"github.com/google/generative-ai-go/genai"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
-	"google.golang.org/api/option"
 
 	"github.com/omegaatt36/cerberus/domain"
 )
 
+// Bot represents the Slack bot with its configuration and dependencies
 type Bot struct {
 	slackBotToken string
 	slackAppToken string
@@ -28,6 +26,7 @@ type Bot struct {
 	aiService   domain.AIService
 }
 
+// NewBot creates a new Bot instance.
 func NewBot(slackBotToken, slackAppToken string, options ...Option) *Bot {
 	bot := &Bot{
 		slackBotToken: slackBotToken,
@@ -44,14 +43,9 @@ func NewBot(slackBotToken, slackAppToken string, options ...Option) *Bot {
 	return bot
 }
 
+// Run starts the bot and listens for Slack events
 func (b *Bot) Run(ctx context.Context) {
-	slog.Info("Bot configuration complete")
-	slog.Info("Bot Token", "token", b.slackBotToken[:10]+"...")
-	slog.Info("App Token", "token", b.slackAppToken[:10]+"...")
-	slog.Info("Database initialized successfully")
-	slog.Info("Preparing to start bot...")
-
-	go b.handleEvents()
+	go b.handleEvents(ctx)
 
 	slog.Info("Starting to listen for Slack events")
 	if err := b.socketClient.RunContext(ctx); err != nil {
@@ -63,152 +57,166 @@ func (b *Bot) Run(ctx context.Context) {
 	slog.Info("Bot execution completed")
 }
 
-func parseInput(input string) (string, string) {
-	// Split the input string by space
+func parseInput(input string) (emoji string, description string) {
 	parts := strings.SplitN(input, " ", 2)
 
-	// If there's only one part, it's just the emoji
-	if len(parts) == 1 {
-		return parts[0], ""
+	if len(parts) == 0 {
+		return "", ""
 	}
 
-	// Otherwise, return emoji and description
-	return parts[0], parts[1]
+	emoji = parts[0]
+	if !isValidSlackEmoji(emoji) {
+		return "", ""
+	}
+
+	if len(parts) == 1 {
+		return emoji, ""
+	}
+
+	return emoji, parts[1]
 }
 
-func (bot *Bot) handleEmojiCommand(command *slack.SlashCommand) {
-	ctx := context.Background()
+func isValidSlackEmoji(s string) bool {
+	if len(s) < 3 || s[0] != ':' || s[len(s)-1] != ':' {
+		return false
+	}
+
+	for _, c := range s[1 : len(s)-1] {
+		if !isValidEmojiChar(c) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isValidEmojiChar(c rune) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == '-' || c == '_'
+}
+
+func (b *Bot) handleEmojiCommand(ctx context.Context, command *slack.SlashCommand) (string, error) {
 	slog.Info("Starting handleEmojiCommand")
 	slog.Info("Command", "command", command)
 
 	if command == nil {
-		slog.Error("Error: Received nil command")
-		return
+		return "", fmt.Errorf("error: received nil command")
 	}
 
 	input := command.Text
 	slog.Info("Input received", "input", input)
 	if input == "" {
 		slog.Info("Empty input received")
-		_, _, err := bot.slackClient.PostMessage(command.ChannelID, slack.MsgOptionText("Please provide an emoji and optional text.", false))
-		if err != nil {
-			slog.Error("Error sending message", "error", err)
-			return
-		}
-		return
+		return "Please provide an emoji and optional text.", nil
 	}
 
 	emoji, description := parseInput(input)
 	if emoji == "" {
-		slog.Error("Error: No emoji found in input")
-		_, _, err := bot.slackClient.PostMessage(command.ChannelID, slack.MsgOptionText("Please provide a valid emoji.", false))
-		if err != nil {
-			slog.Error("Error sending message", "error", err)
-		}
-		return
+		return "", fmt.Errorf("please provide a valid emoji at the beginning of your message.\n (e.g., /emoji 😊 Feeling optimistic today!)")
 	}
 
 	userID := command.UserID
 	if userID == "" {
-		slog.Error("Error: Empty user ID")
-		return
+		return "", fmt.Errorf("can't find user ID")
 	}
 
-	// Stage 1: Store initial data
-	id, err := bot.emotionRepo.CreateEmotion(ctx, domain.CreateEmotionRequest{
+	id, err := b.emotionRepo.CreateEmotion(ctx, domain.CreateEmotionRequest{
 		UserID:      userID,
 		Emoji:       emoji,
 		Description: description,
 	})
 	if err != nil {
-		slog.Error("Error storing initial data", "error", err)
-		_, _, err := bot.slackClient.PostMessage(command.ChannelID, slack.MsgOptionText("Error processing your request. Please try again.", false))
-		if err != nil {
-			slog.Error("Error sending message", "error", err)
-		}
-		return
+		slog.ErrorContext(ctx, "error storing initial data", "error", err)
+		return "", fmt.Errorf("error processing your request, please try again")
 	}
 
-	// Stage 2: Get and update emotion score
-	slog.Info("Analyzing emotion score")
-	score, err := bot.aiService.GetEmotionScore(context.Background(), input)
+	score, err := b.aiService.GetEmotionScore(context.Background(), input)
 	if err != nil {
-		slog.Error("Error analyzing emotion", "error", err)
-	} else {
-		if err := bot.emotionRepo.UpdateEmotion(ctx, id, domain.UpdateEmotionRequest{Score: &score}); err != nil {
-			slog.Error("Error updating score", "error", err)
-		}
+		return "", fmt.Errorf("analyzing emotion score failed: %w", err)
 	}
 
-	// Stage 3: Generate and update task suggestion
-	slog.Info("Generating task suggestion")
-	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("GEMINI_API_KEY")))
-	if err != nil {
-		slog.Error("Error creating Gemini client", "error", err)
-	} else {
-		defer client.Close()
-		task, err := bot.aiService.GenerateTaskSuggestion(ctx, emoji, description, score)
-		if err != nil {
-			slog.Error("Error generating task suggestion", "error", err)
-		} else {
+	if err := b.emotionRepo.UpdateEmotion(ctx, id, domain.UpdateEmotionRequest{Score: &score}); err != nil {
+		slog.ErrorContext(ctx, "error updating score", "error", err)
+	}
 
-			if err := bot.emotionRepo.UpdateEmotion(ctx, id, domain.UpdateEmotionRequest{Task: &task}); err != nil {
-				slog.Error("Error updating task", "error", err)
-			}
-			message := fmt.Sprintf("Emotion score for '%s %s': %d\n建議任務: %s", emoji, description, score, task)
-			_, _, err = bot.slackClient.PostMessage(command.ChannelID, slack.MsgOptionText(message, false))
-			if err != nil {
-				slog.Error("Error sending message", "error", err)
+	task, err := b.aiService.GenerateTaskSuggestion(ctx, emoji, description, score)
+	if err != nil {
+		return "", fmt.Errorf("generating task suggestion failed: %w", err)
+	}
+
+	if err := b.emotionRepo.UpdateEmotion(ctx, id, domain.UpdateEmotionRequest{Task: &task}); err != nil {
+		slog.ErrorContext(ctx, "updating task failed", "error", err)
+	}
+
+	return fmt.Sprintf("建議任務: %s", task), nil
+}
+
+func (b *Bot) handleEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Context cancelled, stopping event handling")
+			return
+		case event := <-b.socketClient.Events:
+			switch event.Type {
+			case socketmode.EventTypeConnecting:
+				slog.Info("Connecting to Slack with Socket Mode...")
+			case socketmode.EventTypeConnectionError:
+				slog.Info("Connection failed. Retrying later...")
+			case socketmode.EventTypeConnected:
+				slog.Info("Connected to Slack with Socket Mode.")
+			case socketmode.EventTypeEventsAPI:
+				eventsAPIEvent, ok := event.Data.(slackevents.EventsAPIEvent)
+				if !ok {
+					slog.Info("ignored event", "event", event)
+					continue
+				}
+				slog.Info("event received", "event", eventsAPIEvent)
+				b.socketClient.Ack(*event.Request)
+			case socketmode.EventTypeSlashCommand:
+				cmd, ok := event.Data.(slack.SlashCommand)
+				if !ok {
+					slog.Info("ignored event", "event", event)
+					continue
+				}
+				b.socketClient.Ack(*event.Request)
+				if err := b.handleSlashCommand(cmd); err != nil {
+					slog.Error("Error handling slash command", "error", err)
+				}
+			case socketmode.EventTypeHello:
+				slog.Info("Received hello event from Slack")
+			default:
+				slog.Info("Unexpected event type received", "type", event.Type)
 			}
 		}
 	}
 }
 
-func (bot *Bot) handleEvents() {
-	for evt := range bot.socketClient.Events {
-		switch evt.Type {
-		case socketmode.EventTypeConnecting:
-			slog.Info("Connecting to Slack with Socket Mode...")
-		case socketmode.EventTypeConnectionError:
-			slog.Info("Connection failed. Retrying later...")
-		case socketmode.EventTypeConnected:
-			slog.Info("Connected to Slack with Socket Mode.")
-		case socketmode.EventTypeEventsAPI:
-			eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
-			if !ok {
-				slog.Info("Ignored event", "event", evt)
-				continue
-			}
-			slog.Info("Event received", "event", eventsAPIEvent)
-			bot.socketClient.Ack(*evt.Request)
-		case socketmode.EventTypeSlashCommand:
-			cmd, ok := evt.Data.(slack.SlashCommand)
-			if !ok {
-				slog.Info("Ignored event", "event", evt)
-				continue
-			}
-			bot.socketClient.Ack(*evt.Request)
-			if err := bot.handleSlashCommand(cmd); err != nil {
-				slog.Error("Error handling slash command", "error", err)
-			}
-		default:
-			slog.Info("Unexpected event type received", "type", evt.Type)
-		}
-	}
-}
-func (bot *Bot) handleSlashCommand(command slack.SlashCommand) error {
-	slog.Info("Handling slash command", "command", command.Command)
-	slog.Info("Command text", "text", command.Text)
-	slog.Info("User ID", "user_id", command.UserID)
-	slog.Info("Channel ID", "channel_id", command.ChannelID)
+func (b *Bot) handleSlashCommand(command slack.SlashCommand) error {
+	ctx := context.Background()
 
-	slog.Info("Received command", "command", command)
+	slog.With(
+		"command", command.Command,
+		"text", command.Text,
+		"user_id", command.UserID,
+		"channel_id", command.ChannelID,
+	).InfoContext(ctx, "Handling slash command")
 
 	switch command.Command {
 	case "/emoji":
-		bot.handleEmojiCommand(&command)
-		return nil
+		message, err := b.handleEmojiCommand(ctx, &command)
+		if err != nil {
+			return b.sendMessage(ctx, command.ChannelID, err.Error())
+		}
+		return b.sendMessage(ctx, command.ChannelID, message)
 	default:
 		return fmt.Errorf("unknown command: %s", command.Command)
 	}
+}
+
+func (b *Bot) sendMessage(ctx context.Context, channelID string, message string) error {
+	_, _, err := b.slackClient.PostMessageContext(ctx, channelID, slack.MsgOptionText(message, false))
+	return err
 }

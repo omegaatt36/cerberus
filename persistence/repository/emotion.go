@@ -12,7 +12,7 @@ import (
 
 var _ domain.EmotionRepository = (*GORMRepository)(nil)
 
-// Emotion
+// Emotion represents a emotion.
 type Emotion struct {
 	ID              int `gorm:"primaryKey"`
 	CreatedAt       time.Time
@@ -25,6 +25,7 @@ type Emotion struct {
 	TaskCompletedAt *time.Time
 }
 
+// TableName returns the table name.
 func (e Emotion) TableName() string {
 	return "emotions"
 }

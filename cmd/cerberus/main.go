@@ -16,7 +16,7 @@ import (
 	"github.com/omegaatt36/cerberus/app/cerberus"
 	"github.com/omegaatt36/cerberus/persistence/database"
 	"github.com/omegaatt36/cerberus/persistence/repository"
-	"github.com/omegaatt36/cerberus/service/gemini"
+	"github.com/omegaatt36/cerberus/pkg/gemini"
 )
 
 var config struct {
